@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: financial-ai-app
+  labels:
+    app: financial-ai
+    component: app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: financial-ai
+      component: app
+  template:
+    metadata:
+      labels:
+        app: financial-ai
+        component: app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8501"
+        prometheus.io/path: "/_stcore/metrics"
+    spec:
+      containers:
+      - name: financial-ai
+        image: financialaiacr.azurecr.io/financial-ai-app:latest
+        ports:
+        - containerPort: 8501
+          name: http
+        env:
+        - name: AZURE_OPENAI_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: financial-ai-secrets
+              key: azure-openai-endpoint
+        - name: AZURE_OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: financial-ai-secrets
+              key: azure-openai-api-key
+        - name: AZURE_OPENAI_API_VERSION
+          value: "2024-02-15-preview"
+        - name: AZURE_OPENAI_CHAT_DEPLOYMENT
+          valueFrom:
+            secretKeyRef:
+              name: financial-ai-secrets
+              key: azure-openai-chat-deployment
+        - name: AZURE_OPENAI_EMBEDDINGS_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: financial-ai-secrets
+              key: azure-openai-embeddings-endpoint
+        - name: AZURE_OPENAI_EMBEDDINGS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: financial-ai-secrets
+              key: azure-openai-embeddings-api-key
+        - name: AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT
+          valueFrom:
+            secretKeyRef:
+              name: financial-ai-secrets
+              key: azure-openai-embeddings-deployment
+        - name: LANGSMITH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: financial-ai-secrets
+              key: langsmith-api-key
+        - name: LANGSMITH_PROJECT
+          value: "financial-ai-production"
+        - name: LANGSMITH_TRACING
+          value: "true"
+        - name: CHROMA_DB_PATH
+          value: "/app/data/vector_db"
+        - name: DOCUMENT_STORAGE_PATH
+          value: "/app/data/processed"
+        - name: RAW_DOCUMENT_PATH
+          value: "/app/data/raw_documents"
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/data
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: financial-ai-data-pvc
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: financial-ai-service
+  labels:
+    app: financial-ai
+    component: app
+spec:
+  selector:
+    app: financial-ai
+    component: app
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8501
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: financial-ai-data-pvc
+  labels:
+    app: financial-ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: managed-premium
