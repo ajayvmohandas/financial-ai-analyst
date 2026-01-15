@@ -1,0 +1,140 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run tests
+      run: |
+        pytest tests/ -v --cov=. --cov-report=xml
+        
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+
+  build-and-push:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+    - name: Deploy to Azure Web App - Staging
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: 'financial-ai-staging'
+        images: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop-${{ github.sha }}'
+        app-settings: |
+          -name "WEBSITES_PORT" 
+           value "8501"
+          -name "AZURE_OPENAI_ENDPOINT" 
+           value "${{ secrets.AZURE_OPENAI_ENDPOINT }}"
+          -name "AZURE_OPENAI_API_KEY" 
+           value "${{ secrets.AZURE_OPENAI_API_KEY }}"
+          -name "AZURE_OPENAI_CHAT_DEPLOYMENT" 
+           value "${{ secrets.AZURE_OPENAI_CHAT_DEPLOYMENT }}"
+          -name "LANGSMITH_API_KEY" 
+           value "${{ secrets.LANGSMITH_API_KEY }}"
+          -name "LANGSMITH_PROJECT" 
+           value "financial-ai-staging"
+
+  deploy-production:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+    - name: Deploy to Azure Web App - Production
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: 'financial-ai-prod'
+        images: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}'
+        app-settings: |
+          -name "WEBSITES_PORT" 
+           value "8501"
+          -name "AZURE_OPENAI_ENDPOINT" 
+           value "${{ secrets.AZURE_OPENAI_ENDPOINT }}"
+          -name "AZURE_OPENAI_API_KEY" 
+           value "${{ secrets.AZURE_OPENAI_API_KEY }}"
+          -name "AZURE_OPENAI_CHAT_DEPLOYMENT" 
+           value "${{ secrets.AZURE_OPENAI_CHAT_DEPLOYMENT }}"
+          -name "LANGSMITH_API_KEY" 
+           value "${{ secrets.LANGSMITH_API_KEY }}"
+          -name "LANGSMITH_PROJECT" 
+           value "financial-ai-production"
